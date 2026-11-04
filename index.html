@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta property="og:title" content="Кубик-раскраска">
+<meta property="og:description" content="Покрутите и раскрасьте кубик из задачи">
+</head>
+<body>
+<title>Кубик-раскраска</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: radial-gradient(120% 120% at 50% 30%, #262b33 0%, #14161a 70%, #0e1013 100%);
+  }
+  canvas { display: block; touch-action: none; }
+
+  #panel {
+    position: absolute; top: calc(14px + env(safe-area-inset-top, 0px)); left: calc(14px + env(safe-area-inset-left, 0px));
+    background: rgba(19, 21, 26, .84);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,.09);
+    border-radius: 14px;
+    padding: 13px 15px;
+    color: #d9dbe0;
+    width: 232px;
+    user-select: none;
+  }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .row:last-child { margin-bottom: 0; }
+  .title { font-weight: 650; font-size: 15px; letter-spacing: .02em; }
+  .lbl { font-size: 12px; color: #9aa0aa; width: 52px; }
+
+  button {
+    font: inherit; color: #e6e8ec; cursor: pointer;
+    background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 8px;
+  }
+  button:hover { background: rgba(255,255,255,.14); }
+
+  .step { width: 28px; height: 28px; font-size: 16px; line-height: 1; }
+  #nVal { font-variant-numeric: tabular-nums; width: 20px; text-align: center; font-weight: 600; }
+
+  .swatch { width: 34px; height: 34px; border-radius: 8px; border: 1px solid rgba(255,255,255,.18); }
+  .swatch[data-c="gray"]  { background: #8f939a; }
+  .swatch[data-c="black"] { background: #1f1f22; }
+  .swatch[data-c="white"] { background: #f3f3f0; }
+  .swatch.active { outline: 2px solid #ffffff; outline-offset: 2px; }
+
+  .counts { gap: 10px; }
+  .chip { display: flex; align-items: center; gap: 6px;
+          font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+          font-size: 14px; font-variant-numeric: tabular-nums; }
+  .sq { width: 13px; height: 13px; border-radius: 3px; display: inline-block;
+        border: 1px solid rgba(255,255,255,.25); }
+  .sq.gray  { background: #8f939a; }
+  .sq.black { background: #1f1f22; }
+  .sq.white { background: #f3f3f0; }
+
+  #reset { padding: 6px 10px; font-size: 13px; width: 100%; }
+
+  .hint {
+    position: absolute; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
+    color: #8b909a; font-size: 12px; text-align: center;
+    background: rgba(19,21,26,.7); padding: 6px 12px; border-radius: 10px;
+    max-width: 92vw;
+  }
+  @media (max-width: 480px) {
+    #panel { width: 196px; padding: 10px 12px; top: calc(10px + env(safe-area-inset-top, 0px)); left: calc(10px + env(safe-area-inset-left, 0px)); }
+    .row { margin-bottom: 8px; }
+    .swatch { width: 30px; height: 30px; }
+    .hint { font-size: 11px; }
+  }
+</style>
+
+<div id="panel">
+  <div class="row title">Куб <span id="nLabel">3×3×3</span></div>
+  <div class="row">
+    <span class="lbl">Размер</span>
+    <button class="step" id="nMinus">−</button>
+    <span id="nVal">3</span>
+    <button class="step" id="nPlus">+</button>
+  </div>
+  <div class="row">
+    <span class="lbl">Кисть</span>
+    <button class="swatch" data-c="gray" title="Серый (1)"></button>
+    <button class="swatch active" data-c="black" title="Чёрный (2)"></button>
+    <button class="swatch" data-c="white" title="Белый (3)"></button>
+  </div>
+  <div class="row counts">
+    <span class="chip"><i class="sq gray"></i><b id="cGray">27</b></span>
+    <span class="chip"><i class="sq black"></i><b id="cBlack">0</b></span>
+    <span class="chip"><i class="sq white"></i><b id="cWhite">0</b></span>
+  </div>
+  <div class="row"><button id="reset">Сбросить всё в серый</button></div>
+</div>
+
+<div class="hint">
+  Тяните — вращение · клик по кубику — покрасить · колесо / щипок — масштаб · клавиши 1 2 3 — кисть.
+  Внутренние кубики скрыты, но учтены в счётчике (остаются серыми).
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function () {
+  const COLORS = { gray: 0x8f939a, black: 0x1f1f22, white: 0xf3f3f0 };
+  const EDGES  = { gray: 0x33363c, black: 0x62656c, white: 0x8f8f8a };
+
+  let N = 3;
+  let brush = 'black';
+  let cubes = [];
+  let camDist;
+  let zoom = 1;                       // масштаб, который выбрал пользователь
+  const fit = () => Math.max(1, 1.08 / camera.aspect);   // запас по ширине для узких экранов
+  function placeCamera() {
+    camDist = N * 2.8 * zoom * fit();
+    camera.position.setLength(camDist);
+  }
+
+  // --- сцена ---
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 200);
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(innerWidth, innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x555a63, 0.95));
+  const key = new THREE.DirectionalLight(0xffffff, 0.65);
+  key.position.set(5, 9, 7);
+  scene.add(key);
+  const fill = new THREE.DirectionalLight(0xffffff, 0.25);
+  fill.position.set(-6, -3, -5);
+  scene.add(fill);
+
+  const group = new THREE.Group();
+  group.quaternion.setFromEuler(new THREE.Euler(0.5, 0.65, 0));
+  scene.add(group);
+
+  const boxGeo = new THREE.BoxGeometry(0.94, 0.94, 0.94);
+  const edgeGeo = new THREE.EdgesGeometry(boxGeo);
+
+  function buildCube(n) {
+    while (group.children.length) {
+      const m = group.children.pop();
+      m.material.dispose();
+      m.userData.lineMat.dispose();
+      group.remove(m);
+    }
+    cubes = [];
+    const off = (n - 1) / 2;
+    for (let x = 0; x < n; x++)
+      for (let y = 0; y < n; y++)
+        for (let z = 0; z < n; z++) {
+          const mat = new THREE.MeshLambertMaterial({ color: COLORS.gray });
+          const mesh = new THREE.Mesh(boxGeo, mat);
+          mesh.position.set(x - off, y - off, z - off);
+          const lineMat = new THREE.LineBasicMaterial({ color: EDGES.gray });
+          mesh.add(new THREE.LineSegments(edgeGeo, lineMat));
+          mesh.userData = { state: 'gray', lineMat: lineMat };
+          group.add(mesh);
+          cubes.push(mesh);
+        }
+    camera.position.set(0, 0, 1);
+    camera.lookAt(0, 0, 0);
+    zoom = 1;
+    placeCamera();
+    document.getElementById('nLabel').textContent = n + '\u00D7' + n + '\u00D7' + n;
+    document.getElementById('nVal').textContent = n;
+    updateCounts();
+  }
+
+  function paint(mesh, c) {
+    mesh.userData.state = c;
+    mesh.material.color.setHex(COLORS[c]);
+    mesh.userData.lineMat.color.setHex(EDGES[c]);
+    updateCounts();
+  }
+
+  function updateCounts() {
+    const t = { gray: 0, black: 0, white: 0 };
+    cubes.forEach(m => t[m.userData.state]++);
+    document.getElementById('cGray').textContent = t.gray;
+    document.getElementById('cBlack').textContent = t.black;
+    document.getElementById('cWhite').textContent = t.white;
+  }
+
+  // --- рейкаст ---
+  const raycaster = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  function pick(clientX, clientY) {
+    ndc.x = (clientX / innerWidth) * 2 - 1;
+    ndc.y = -(clientY / innerHeight) * 2 + 1;
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObjects(cubes, false);
+    return hits.length ? hits[0].object : null;
+  }
+
+  // --- ховер ---
+  let hovered = null;
+  function setHover(mesh) {
+    if (hovered === mesh) return;
+    if (hovered) hovered.material.emissive.setHex(0x000000);
+    hovered = mesh;
+    if (hovered) hovered.material.emissive.setHex(0x2a2c30);
+  }
+
+  // --- управление: вращение / клик / масштаб ---
+  const pointers = new Map();
+  let moved = false, downX = 0, downY = 0, pinchDist = 0;
+  const dq = new THREE.Quaternion();
+  const eul = new THREE.Euler();
+
+  const el = renderer.domElement;
+  el.addEventListener('contextmenu', e => e.preventDefault());
+
+  el.addEventListener('pointerdown', e => {
+    el.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 1) { moved = false; downX = e.clientX; downY = e.clientY; }
+    if (pointers.size === 2) {
+      const p = [...pointers.values()];
+      pinchDist = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+    }
+  });
+
+  el.addEventListener('pointermove', e => {
+    if (!pointers.has(e.pointerId)) {           // просто наведение
+      if (e.pointerType === 'mouse') setHover(pick(e.clientX, e.clientY));
+      return;
+    }
+    const prev = pointers.get(e.pointerId);
+    const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (pointers.size === 1) {
+      if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 6) moved = true;
+      eul.set(dy * 0.006, dx * 0.006, 0, 'XYZ');
+      dq.setFromEuler(eul);
+      group.quaternion.premultiply(dq);
+    } else if (pointers.size === 2) {
+      moved = true;
+      const p = [...pointers.values()];
+      const d = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+      if (pinchDist > 0) dolly(pinchDist / d);
+      pinchDist = d;
+    }
+  });
+
+  el.addEventListener('pointerup', e => {
+    pointers.delete(e.pointerId);
+    if (pointers.size === 0 && !moved) {
+      const m = pick(e.clientX, e.clientY);
+      if (m) paint(m, brush);
+    }
+  });
+  el.addEventListener('pointercancel', e => pointers.delete(e.pointerId));
+
+  function dolly(f) {
+    zoom = Math.min(Math.max(zoom * f, 1.5 / 2.8), 7 / 2.8);
+    placeCamera();
+  }
+  el.addEventListener('wheel', e => {
+    e.preventDefault();
+    dolly(e.deltaY > 0 ? 1.08 : 0.93);
+  }, { passive: false });
+
+  // --- панель ---
+  const swatches = [...document.querySelectorAll('.swatch')];
+  function setBrush(c) {
+    brush = c;
+    swatches.forEach(b => b.classList.toggle('active', b.dataset.c === c));
+  }
+  swatches.forEach(b => b.addEventListener('click', () => setBrush(b.dataset.c)));
+  addEventListener('keydown', e => {
+    if (e.key === '1') setBrush('gray');
+    if (e.key === '2') setBrush('black');
+    if (e.key === '3') setBrush('white');
+  });
+
+  document.getElementById('nMinus').addEventListener('click', () => {
+    if (N > 2) { N--; buildCube(N); }
+  });
+  document.getElementById('nPlus').addEventListener('click', () => {
+    if (N < 6) { N++; buildCube(N); }
+  });
+  document.getElementById('reset').addEventListener('click', () => {
+    cubes.forEach(m => paint(m, 'gray'));
+  });
+
+  addEventListener('resize', () => {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+    placeCamera();
+  });
+
+  buildCube(N);
+  (function loop() {
+    requestAnimationFrame(loop);
+    renderer.render(scene, camera);
+  })();
+})();
+</script>
+
+</body>
+</html>
